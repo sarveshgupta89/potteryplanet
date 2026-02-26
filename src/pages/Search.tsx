@@ -192,11 +192,11 @@ export default function Search() {
 
       {results.length > 0 && (
         <div className="mt-8">
-          <h3 className="text-xl font-serif font-medium text-stone-900 mb-4">Similar Products ({results.length})</h3>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-            {results.map((product) => (
-              <div key={product.id} className="bg-white rounded-2xl overflow-hidden shadow-sm border border-stone-100 flex flex-col">
-                <div className="relative aspect-square bg-stone-100">
+          <h3 className="text-xl font-serif font-medium text-stone-900 mb-4">Exact Match</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+            {[results[0]].map((product) => (
+              <div key={product.id} className="bg-white rounded-2xl overflow-hidden shadow-sm border-2 border-stone-900 flex flex-col md:flex-row">
+                <div className="relative aspect-square md:w-1/2 bg-stone-100">
                   <img
                     src={product.image_url}
                     alt={product.name}
@@ -208,16 +208,49 @@ export default function Search() {
                     #{product.unit_number}
                   </div>
                 </div>
-                <div className="p-3 flex flex-col flex-1">
-                  <h3 className="font-serif font-medium text-stone-900 text-sm leading-tight mb-1 line-clamp-2">{product.name}</h3>
+                <div className="p-4 md:p-6 flex flex-col flex-1 justify-center">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-stone-500 mb-1">{product.type}</div>
+                  <h3 className="font-serif font-medium text-stone-900 text-xl leading-tight mb-2">{product.name}</h3>
+                  <p className="text-stone-600 text-sm mb-4 line-clamp-3">{product.description}</p>
                   <div className="flex items-end justify-between mt-auto">
-                    <div className="text-[10px] text-stone-500 uppercase tracking-wider">{product.vendor}</div>
-                    <div className="font-mono font-medium text-stone-900 text-sm">$\{(product.price || 0).toFixed(2)}</div>
+                    <div className="text-xs text-stone-500 uppercase tracking-wider">{product.vendor}</div>
+                    <div className="font-mono font-medium text-stone-900 text-lg">${(product.price || 0).toFixed(2)}</div>
                   </div>
                 </div>
               </div>
             ))}
           </div>
+
+          {results.length > 1 && (
+            <>
+              <h3 className="text-xl font-serif font-medium text-stone-900 mb-4">Similar Products</h3>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                {results.slice(1).map((product) => (
+                  <div key={product.id} className="bg-white rounded-2xl overflow-hidden shadow-sm border border-stone-100 flex flex-col">
+                    <div className="relative aspect-square bg-stone-100">
+                      <img
+                        src={product.image_url}
+                        alt={product.name}
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                        loading="lazy"
+                      />
+                      <div className="absolute bottom-2 left-2 px-2 py-1 bg-white/90 backdrop-blur-sm rounded-lg text-[10px] font-bold tracking-wider uppercase text-stone-900 shadow-sm">
+                        #{product.unit_number}
+                      </div>
+                    </div>
+                    <div className="p-3 flex flex-col flex-1">
+                      <h3 className="font-serif font-medium text-stone-900 text-sm leading-tight mb-1 line-clamp-2">{product.name}</h3>
+                      <div className="flex items-end justify-between mt-auto">
+                        <div className="text-[10px] text-stone-500 uppercase tracking-wider">{product.vendor}</div>
+                        <div className="font-mono font-medium text-stone-900 text-sm">${(product.price || 0).toFixed(2)}</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
       

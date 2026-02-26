@@ -3,7 +3,7 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import multer from 'multer';
 import Database from 'better-sqlite3';
-import { GoogleGenAI } from '@google/genai';
+import { pipeline } from '@huggingface/transformers';
 import path from 'path';
 import fs from 'fs';
 
@@ -179,82 +179,107 @@ async function startServer() {
     }
   });
 
+  // Initialize the model lazily
+  let classifier: any = null;
+  async function getClassifier() {
+    if (!classifier) {
+      console.log('Loading local zero-shot image classification model...');
+      classifier = await pipeline('zero-shot-image-classification', 'Xenova/clip-vit-base-patch32');
+      console.log('Model loaded successfully.');
+    }
+    return classifier;
+  }
+
   app.post('/api/search-by-image', upload.single('image'), async (req, res) => {
+    console.log('Received search-by-image request');
     if (!req.file) {
+      console.log('No image uploaded');
       return res.status(400).json({ success: false, message: 'No image uploaded' });
     }
 
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'Please configure your Gemini API key in the AI Studio Secrets panel.' 
-        });
-      }
+      const imagePath = req.file.path + '.jpg';
+      fs.renameSync(req.file.path, imagePath);
+      console.log('Image saved to', imagePath);
+
+      // Fetch all products to use their names as candidate labels
+      const allProducts = db.prepare('SELECT id, name, type FROM products').all() as any[];
+      const candidateLabels = allProducts.map(p => p.name);
+
+      // Load the local open-source model
+      console.log('Getting classifier...');
+      const classify = await getClassifier();
       
-      const ai = new GoogleGenAI({ apiKey });
-      const imagePath = req.file.path;
-      const imageBytes = fs.readFileSync(imagePath);
-      const base64Image = imageBytes.toString('base64');
-
-      // Fetch all products to provide context to Gemini
-      const allProducts = db.prepare('SELECT id, unit_number, name, description, type FROM products').all() as any[];
-      const catalogText = allProducts.map(p => `ID: ${p.id}, Unit: ${p.unit_number}, Name: ${p.name}, Type: ${p.type}, Desc: ${p.description}`).join('\n');
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                mimeType: req.file.mimetype,
-                data: base64Image,
-              },
-            },
-            {
-              text: `Analyze this image of a garden ornament/planter/fountain. Compare it against the following product catalog:\n\n${catalogText}\n\nIdentify the most likely matching products from the catalog. Return ONLY a JSON array of the matching product IDs (e.g., [1, 4, 5]). If no good match is found, return an empty array []. Do not include any markdown formatting or other text.`,
-            },
-          ],
-        },
-      });
-
-      fs.unlinkSync(imagePath); // Clean up uploaded file
-
-      let matchedIds: number[] = [];
+      // Run classification
+      console.log('Running classification...');
+      const results = await classify(imagePath, candidateLabels);
+      console.log('Classification complete');
+      
       try {
-        const text = response.text?.replace(/```json/g, '').replace(/```/g, '').trim() || '[]';
-        matchedIds = JSON.parse(text);
+        fs.unlinkSync(imagePath); // Clean up uploaded file
       } catch (e) {
-        console.error('Failed to parse Gemini response:', response.text);
+        console.error('Failed to delete uploaded file', e);
       }
 
-      if (Array.isArray(matchedIds) && matchedIds.length > 0) {
-        const placeholders = matchedIds.map(() => '?').join(',');
-        const results = db.prepare(`SELECT * FROM products WHERE id IN (${placeholders})`).all(...matchedIds);
-        res.json({ success: true, keywords: ['Catalog Match'], results });
-      } else {
-        res.json({ success: true, keywords: [], results: [] });
+      // Results is an array of { score, label } sorted by score descending
+      let topLabels: string[] = [];
+      if (results && results.length > 0) {
+        // Always take the best guess as the exact match
+        topLabels.push(results[0].label);
+        
+        // Add other good matches from the model
+        const threshold = 0.05;
+        const otherGoodMatches = results.slice(1).filter((r: any) => r.score > threshold).map((r: any) => r.label);
+        topLabels.push(...otherGoodMatches);
       }
-    } catch (err: any) {
-      console.error('Gemini API Error:', err);
-      let errorMessage = err.message || 'An error occurred during visual search.';
-      
-      // Handle invalid API key error specifically
-      if (errorMessage.includes('API_KEY_INVALID') || errorMessage.includes('API key not valid')) {
-        errorMessage = 'Invalid Gemini API Key. Please configure a valid API key in the AI Studio Secrets panel.';
-      } else if (errorMessage.startsWith('{')) {
-        try {
-          const parsed = JSON.parse(errorMessage);
-          if (parsed.error && parsed.error.message) {
-            errorMessage = parsed.error.message;
+
+      let finalProducts: any[] = [];
+      let keywords: string[] = [];
+
+      if (topLabels.length > 0) {
+        const topMatchName = topLabels[0];
+        const topProductInfo = allProducts.find(p => p.name === topMatchName);
+        keywords = topLabels.slice(0, 3); // Keep top 3 for keywords display
+        
+        if (topProductInfo) {
+          // 1. Get the exact match
+          const exactMatch = db.prepare('SELECT * FROM products WHERE id = ?').get(topProductInfo.id);
+          if (exactMatch) finalProducts.push(exactMatch);
+
+          // 2. Get other model matches
+          const otherModelNames = topLabels.slice(1, 4); // next 3 matches from model
+          if (otherModelNames.length > 0) {
+            const otherIds = otherModelNames.map(name => allProducts.find(p => p.name === name)?.id).filter(Boolean);
+            if (otherIds.length > 0) {
+              const placeholders = otherIds.map(() => '?').join(',');
+              const otherMatches = db.prepare(`SELECT * FROM products WHERE id IN (${placeholders})`).all(...otherIds) as any[];
+              // Sort them by model confidence
+              otherMatches.sort((a, b) => otherIds.indexOf(a.id) - otherIds.indexOf(b.id));
+              finalProducts.push(...otherMatches);
+            }
           }
-        } catch (e) {
-          // Ignore parsing error
+
+          // 3. Fill with similar pots (same type) up to 6 total results
+          const currentIds = finalProducts.map(p => p.id);
+          const limit = 6 - finalProducts.length;
+          
+          if (limit > 0) {
+            let similarPots;
+            if (currentIds.length > 0) {
+              const placeholders = currentIds.map(() => '?').join(',');
+              similarPots = db.prepare(`SELECT * FROM products WHERE type = ? AND id NOT IN (${placeholders}) LIMIT ?`).all(topProductInfo.type, ...currentIds, limit) as any[];
+            } else {
+              similarPots = db.prepare(`SELECT * FROM products WHERE type = ? LIMIT ?`).all(topProductInfo.type, limit) as any[];
+            }
+            finalProducts.push(...similarPots);
+          }
         }
       }
-      
-      res.status(500).json({ success: false, message: errorMessage });
+
+      res.json({ success: true, keywords: keywords, results: finalProducts });
+    } catch (err: any) {
+      console.error('Local AI Error:', err);
+      res.status(500).json({ success: false, message: 'An error occurred during local visual search.', error: err.message, stack: err.stack });
     }
   });
 
