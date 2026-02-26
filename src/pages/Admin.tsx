@@ -11,7 +11,7 @@ export default function Admin() {
     name: '',
     description: '',
     price: '',
-    vendor: 'Pottery Planet',
+    vendor: 'Giannini',
     type: 'Planter',
     size: '',
     image_url: ''
@@ -39,7 +39,7 @@ export default function Admin() {
         setStatus({ type: 'success', message: 'Product added successfully!' });
         setFormData({
           unit_number: '', name: '', description: '', price: '',
-          vendor: 'Pottery Planet', type: 'Planter', size: '', image_url: ''
+          vendor: 'Giannini', type: 'Planter', size: '', image_url: ''
         });
       } else {
         setStatus({ type: 'error', message: data.message });
@@ -172,7 +172,7 @@ export default function Admin() {
                 onChange={e => setFormData({...formData, vendor: e.target.value})}
                 className="w-full px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-stone-900 text-sm appearance-none"
               >
-                <option value="Pottery Planet">Pottery Planet</option>
+                <option value="Giannini">Giannini</option>
                 <option value="Campia">Campia</option>
                 <option value="Herit">Herit</option>
               </select>

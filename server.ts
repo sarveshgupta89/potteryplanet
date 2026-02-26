@@ -46,14 +46,14 @@ const count = db.prepare('SELECT COUNT(*) as count FROM products').get() as { co
 if (count.count === 0) {
   const insertProduct = db.prepare('INSERT INTO products (unit_number, name, description, price, vendor, type, size, image_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
   const dummyProducts = [
-    ['2316', 'Anduze de Lys Pot Medium', 'Medium size pot with lys design', 150.00, 'Pottery Planet', 'Planter', '27"H x 24"W x 13" Dia Base', 'https://picsum.photos/seed/2316/400/400'],
-    ['2315', 'Anduze de Lys Pot Large', 'Large size pot with lys design', 250.00, 'Pottery Planet', 'Planter', '33"H x 29"W x 17" Dia Base', 'https://picsum.photos/seed/2315/400/400'],
-    ['2317', 'Anduze de Lys Pot Small', 'Small size pot with lys design', 95.00, 'Pottery Planet', 'Planter', 'Small', 'https://picsum.photos/seed/2317/400/400'],
-    ['2094', 'Estate Urn', 'Classic estate urn', 120.00, 'Pottery Planet', 'Urn', '26"H x 26"W x 13" sq base', 'https://picsum.photos/seed/2094/400/400'],
-    ['2095', 'Venetian Urn', 'Venetian style urn', 180.00, 'Pottery Planet', 'Urn', '28"H x 23"W x 13" sq base', 'https://picsum.photos/seed/2095/400/400'],
-    ['2092', 'Rolled Rim Square Pot', 'Square pot with rolled rim', 110.00, 'Pottery Planet', 'Planter', '24"H x 24"W', 'https://picsum.photos/seed/2092/400/400'],
-    ['871', 'Garden Ball', 'Decorative garden ball', 45.00, 'Pottery Planet', 'Ornament', '10" diam', 'https://picsum.photos/seed/871/400/400'],
-    ['2093', 'Commercial Tree Planter', 'Large commercial planter', 350.00, 'Pottery Planet', 'Planter', '31"H x 38"W', 'https://picsum.photos/seed/2093/400/400'],
+    ['2316', 'Anduze de Lys Pot Medium', 'Medium size pot with lys design', 150.00, 'Giannini', 'Planter', '27"H x 24"W x 13" Dia Base', 'https://picsum.photos/seed/2316/400/400'],
+    ['2315', 'Anduze de Lys Pot Large', 'Large size pot with lys design', 250.00, 'Giannini', 'Planter', '33"H x 29"W x 17" Dia Base', 'https://picsum.photos/seed/2315/400/400'],
+    ['2317', 'Anduze de Lys Pot Small', 'Small size pot with lys design', 95.00, 'Giannini', 'Planter', 'Small', 'https://picsum.photos/seed/2317/400/400'],
+    ['2094', 'Estate Urn', 'Classic estate urn', 120.00, 'Giannini', 'Urn', '26"H x 26"W x 13" sq base', 'https://picsum.photos/seed/2094/400/400'],
+    ['2095', 'Venetian Urn', 'Venetian style urn', 180.00, 'Giannini', 'Urn', '28"H x 23"W x 13" sq base', 'https://picsum.photos/seed/2095/400/400'],
+    ['2092', 'Rolled Rim Square Pot', 'Square pot with rolled rim', 110.00, 'Giannini', 'Planter', '24"H x 24"W', 'https://picsum.photos/seed/2092/400/400'],
+    ['871', 'Garden Ball', 'Decorative garden ball', 45.00, 'Giannini', 'Ornament', '10" diam', 'https://picsum.photos/seed/871/400/400'],
+    ['2093', 'Commercial Tree Planter', 'Large commercial planter', 350.00, 'Giannini', 'Planter', '31"H x 38"W', 'https://picsum.photos/seed/2093/400/400'],
     ['2450', 'Venetian Lion Wall Plaque', 'Lion head wall plaque', 85.00, 'Campia', 'Wall Ornament', '8"x15"x17"', 'https://picsum.photos/seed/2450/400/400'],
     ['2467', 'Rams Head Wall Plaque', 'Rams head wall plaque', 75.00, 'Campia', 'Wall Ornament', '3"x8"x9"', 'https://picsum.photos/seed/2467/400/400'],
     ['2019', 'Deruta Lemon Planter', 'Lemon design planter', 160.00, 'Campia', 'Planter', '12"b x 16"w', 'https://picsum.photos/seed/2019/400/400'],
@@ -130,6 +130,12 @@ async function startServer() {
       const stmt = db.prepare('INSERT INTO products (unit_number, name, description, price, vendor, type, size, image_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
       const info = stmt.run(unit_number, name, description, price, vendor, type, size, image_url);
       res.json({ success: true, id: info.lastInsertRowid });
+      // If the model is already loaded, pre-compute embedding for the new product in the background
+      if (image_url && extractor) {
+        computeEmbedding(image_url)
+          .then((emb: number[]) => productEmbeddings.set(Number(info.lastInsertRowid), emb))
+          .catch((e: any) => console.error('Failed to embed new product:', e));
+      }
     } catch (err: any) {
       res.status(400).json({ success: false, message: err.message });
     }
@@ -179,21 +185,50 @@ async function startServer() {
     }
   });
 
-  // Initialize the model lazily
-  let classifier: any = null;
-  async function getClassifier() {
-    if (!classifier) {
-      console.log('Loading local zero-shot image classification model...');
-      classifier = await pipeline('zero-shot-image-classification', 'Xenova/clip-vit-base-patch32');
-      console.log('Model loaded successfully.');
+  // DINOv2 image feature extractor for visual similarity search
+  let extractor: any = null;
+  const productEmbeddings = new Map<number, number[]>();
+
+  async function getExtractor() {
+    if (!extractor) {
+      console.log('Loading DINOv2 image feature extraction model...');
+      extractor = await pipeline('image-feature-extraction', 'Xenova/dinov2-base');
+      console.log('DINOv2 model loaded successfully.');
     }
-    return classifier;
+    return extractor;
+  }
+
+  async function computeEmbedding(imageSource: string): Promise<number[]> {
+    const ext = await getExtractor();
+    const output = await ext(imageSource, { pooling: 'mean', normalize: true });
+    return Array.from(output.data as Float32Array);
+  }
+
+  function cosineSimilarity(a: number[], b: number[]): number {
+    // Embeddings are normalized, so dot product == cosine similarity
+    let dot = 0;
+    for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
+    return dot;
+  }
+
+  async function ensureProductEmbeddings() {
+    const products = db.prepare('SELECT id, image_url FROM products').all() as any[];
+    const missing = products.filter((p: any) => !productEmbeddings.has(p.id));
+    if (missing.length === 0) return;
+    console.log(`Computing embeddings for ${missing.length} product(s)...`);
+    for (const product of missing) {
+      try {
+        const emb = await computeEmbedding(product.image_url);
+        productEmbeddings.set(product.id, emb);
+      } catch (e) {
+        console.error(`Failed to embed product ${product.id}:`, e);
+      }
+    }
   }
 
   app.post('/api/search-by-image', upload.single('image'), async (req, res) => {
     console.log('Received search-by-image request');
     if (!req.file) {
-      console.log('No image uploaded');
       return res.status(400).json({ success: false, message: 'No image uploaded' });
     }
 
@@ -202,84 +237,36 @@ async function startServer() {
       fs.renameSync(req.file.path, imagePath);
       console.log('Image saved to', imagePath);
 
-      // Fetch all products to use their names as candidate labels
-      const allProducts = db.prepare('SELECT id, name, type FROM products').all() as any[];
-      const candidateLabels = allProducts.map(p => p.name);
+      // Ensure all product embeddings are ready (loads model on first call)
+      await ensureProductEmbeddings();
 
-      // Load the local open-source model
-      console.log('Getting classifier...');
-      const classify = await getClassifier();
-      
-      // Run classification
-      console.log('Running classification...');
-      const results = await classify(imagePath, candidateLabels);
-      console.log('Classification complete');
-      
+      // Compute embedding for the uploaded query image
+      console.log('Computing query image embedding...');
+      const queryEmbedding = await computeEmbedding(imagePath);
+      console.log('Query embedding computed.');
+
       try {
-        fs.unlinkSync(imagePath); // Clean up uploaded file
+        fs.unlinkSync(imagePath);
       } catch (e) {
         console.error('Failed to delete uploaded file', e);
       }
 
-      // Results is an array of { score, label } sorted by score descending
-      let topLabels: string[] = [];
-      if (results && results.length > 0) {
-        // Always take the best guess as the exact match
-        topLabels.push(results[0].label);
-        
-        // Add other good matches from the model
-        const threshold = 0.05;
-        const otherGoodMatches = results.slice(1).filter((r: any) => r.score > threshold).map((r: any) => r.label);
-        topLabels.push(...otherGoodMatches);
-      }
+      // Rank all products by cosine similarity to the query image
+      const allProducts = db.prepare('SELECT * FROM products').all() as any[];
+      const scored = allProducts
+        .filter((p: any) => productEmbeddings.has(p.id))
+        .map((p: any) => ({
+          product: p,
+          score: cosineSimilarity(queryEmbedding, productEmbeddings.get(p.id)!),
+        }))
+        .sort((a: any, b: any) => b.score - a.score);
 
-      let finalProducts: any[] = [];
-      let keywords: string[] = [];
+      const topResults = scored.slice(0, 6).map((s: any) => s.product);
 
-      if (topLabels.length > 0) {
-        const topMatchName = topLabels[0];
-        const topProductInfo = allProducts.find(p => p.name === topMatchName);
-        keywords = topLabels.slice(0, 3); // Keep top 3 for keywords display
-        
-        if (topProductInfo) {
-          // 1. Get the exact match
-          const exactMatch = db.prepare('SELECT * FROM products WHERE id = ?').get(topProductInfo.id);
-          if (exactMatch) finalProducts.push(exactMatch);
-
-          // 2. Get other model matches
-          const otherModelNames = topLabels.slice(1, 4); // next 3 matches from model
-          if (otherModelNames.length > 0) {
-            const otherIds = otherModelNames.map(name => allProducts.find(p => p.name === name)?.id).filter(Boolean);
-            if (otherIds.length > 0) {
-              const placeholders = otherIds.map(() => '?').join(',');
-              const otherMatches = db.prepare(`SELECT * FROM products WHERE id IN (${placeholders})`).all(...otherIds) as any[];
-              // Sort them by model confidence
-              otherMatches.sort((a, b) => otherIds.indexOf(a.id) - otherIds.indexOf(b.id));
-              finalProducts.push(...otherMatches);
-            }
-          }
-
-          // 3. Fill with similar pots (same type) up to 6 total results
-          const currentIds = finalProducts.map(p => p.id);
-          const limit = 6 - finalProducts.length;
-          
-          if (limit > 0) {
-            let similarPots;
-            if (currentIds.length > 0) {
-              const placeholders = currentIds.map(() => '?').join(',');
-              similarPots = db.prepare(`SELECT * FROM products WHERE type = ? AND id NOT IN (${placeholders}) LIMIT ?`).all(topProductInfo.type, ...currentIds, limit) as any[];
-            } else {
-              similarPots = db.prepare(`SELECT * FROM products WHERE type = ? LIMIT ?`).all(topProductInfo.type, limit) as any[];
-            }
-            finalProducts.push(...similarPots);
-          }
-        }
-      }
-
-      res.json({ success: true, keywords: keywords, results: finalProducts });
+      res.json({ success: true, keywords: [], results: topResults });
     } catch (err: any) {
-      console.error('Local AI Error:', err);
-      res.status(500).json({ success: false, message: 'An error occurred during local visual search.', error: err.message, stack: err.stack });
+      console.error('Image search error:', err);
+      res.status(500).json({ success: false, message: 'Image search failed.', error: err.message, stack: err.stack });
     }
   });
 
