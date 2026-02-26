@@ -1,0 +1,5 @@
+{
+  "name": "Pottery Planet",
+  "description": "Mobile app for browsing, searching, and managing the Pottery Planet catalog.",
+  "requestFramePermissions": ["camera"]
+}
