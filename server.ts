@@ -193,10 +193,13 @@ async function startServer() {
       const stmt = db.prepare('INSERT INTO products (unit_number, name, description, price, vendor, type, size, image_url, h, w, b, d, base) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
       const info = stmt.run(unit_number, name, description, price, vendor, type, size, image_url, h || '', w || '', b || '', d || '', base || '');
       res.json({ success: true, id: info.lastInsertRowid });
-      // If the model is already loaded, pre-compute embedding for the new product in the background
-      if (image_url && extractor) {
+      // If embeddings are ready, pre-compute embedding for the new product in the background
+      if (image_url && embeddingsReady) {
         computeEmbedding(resolveImagePath(image_url))
-          .then((emb: number[]) => productEmbeddings.set(Number(info.lastInsertRowid), emb))
+          .then((emb: number[]) => {
+            productEmbeddings.set(Number(info.lastInsertRowid), emb);
+            saveEmbeddingsCache();
+          })
           .catch((e: any) => console.error('Failed to embed new product:', e));
       }
     } catch (err: any) {
@@ -353,6 +356,8 @@ async function startServer() {
   // DINOv2 image feature extractor for visual similarity search
   let extractor: any = null;
   const productEmbeddings = new Map<number, number[]>();
+  let embeddingsReady = false;
+  const EMBEDDINGS_CACHE = path.join(DATA_DIR, 'embeddings.json');
 
   async function getExtractor() {
     if (!extractor) {
@@ -388,19 +393,49 @@ async function startServer() {
     return imageUrl; // full HTTP URL or absolute path — use as-is
   }
 
-  async function ensureProductEmbeddings() {
-    const products = db.prepare('SELECT id, image_url FROM products').all() as any[];
-    const missing = products.filter((p: any) => !productEmbeddings.has(p.id));
-    if (missing.length === 0) return;
-    console.log(`Computing embeddings for ${missing.length} product(s)...`);
-    for (const product of missing) {
-      try {
-        const localPath = resolveImagePath(product.image_url);
-        const emb = await computeEmbedding(localPath);
-        productEmbeddings.set(product.id, emb);
-      } catch (e) {
-        console.error(`Failed to embed product ${product.id}:`, e);
+  function saveEmbeddingsCache() {
+    try {
+      const data: Record<string, number[]> = {};
+      for (const [id, emb] of productEmbeddings) data[String(id)] = emb;
+      fs.writeFileSync(EMBEDDINGS_CACHE, JSON.stringify(data));
+      console.log(`Embeddings cache saved (${productEmbeddings.size} entries).`);
+    } catch (e) {
+      console.error('Failed to save embeddings cache:', e);
+    }
+  }
+
+  async function warmupEmbeddings() {
+    try {
+      // Load from disk cache first — avoids re-computing on restarts/redeploys
+      if (fs.existsSync(EMBEDDINGS_CACHE)) {
+        const cached = JSON.parse(fs.readFileSync(EMBEDDINGS_CACHE, 'utf-8'));
+        for (const [id, emb] of Object.entries(cached)) {
+          productEmbeddings.set(Number(id), emb as number[]);
+        }
+        console.log(`Loaded ${productEmbeddings.size} embeddings from disk cache.`);
       }
+
+      // Compute any missing embeddings (loads model only if needed)
+      const products = db.prepare('SELECT id, image_url FROM products').all() as any[];
+      const missing = products.filter((p: any) => !productEmbeddings.has(p.id));
+      if (missing.length > 0) {
+        console.log(`Computing embeddings for ${missing.length} product(s)...`);
+        for (const product of missing) {
+          try {
+            const localPath = resolveImagePath(product.image_url);
+            const emb = await computeEmbedding(localPath);
+            productEmbeddings.set(product.id, emb);
+          } catch (e) {
+            console.error(`Failed to embed product ${product.id}:`, e);
+          }
+        }
+        saveEmbeddingsCache();
+      }
+
+      embeddingsReady = true;
+      console.log('Visual search ready.');
+    } catch (e) {
+      console.error('Embedding warmup failed:', e);
     }
   }
 
@@ -410,13 +445,15 @@ async function startServer() {
       return res.status(400).json({ success: false, message: 'No image uploaded' });
     }
 
+    if (!embeddingsReady) {
+      try { fs.unlinkSync(req.file.path); } catch {}
+      return res.status(503).json({ success: false, message: 'Visual search is warming up, please try again in a moment.' });
+    }
+
     try {
       const imagePath = req.file.path + '.jpg';
       fs.renameSync(req.file.path, imagePath);
       console.log('Image saved to', imagePath);
-
-      // Ensure all product embeddings are ready (loads model on first call)
-      await ensureProductEmbeddings();
 
       // Compute embedding for the uploaded query image
       console.log('Computing query image embedding...');
@@ -476,6 +513,8 @@ async function startServer() {
   const PORT = process.env.PORT || 3001;
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    // Start embedding warmup in background — doesn't block server startup
+    warmupEmbeddings();
   });
 }
 
