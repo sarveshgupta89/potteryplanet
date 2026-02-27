@@ -362,7 +362,7 @@ async function startServer() {
   async function getExtractor() {
     if (!extractor) {
       console.log('Loading DINOv2 image feature extraction model...');
-      extractor = await pipeline('image-feature-extraction', 'Xenova/dinov2-base');
+      extractor = await pipeline('image-feature-extraction', 'Xenova/dinov2-base', { dtype: 'fp32' });
       console.log('DINOv2 model loaded successfully.');
     }
     return extractor;
