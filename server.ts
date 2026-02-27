@@ -372,7 +372,10 @@ async function startServer() {
   async function computeEmbedding(imageSource: string): Promise<number[]> {
     const ext = await getExtractor();
     const output = await ext(imageSource, { pooling: 'mean', normalize: true });
-    return Array.from(output.data as Float32Array);
+    const data = output.data as Float32Array;
+    // Slice to hidden-size dimension to match how embeddings.json was generated
+    const hiddenSize = output.dims[output.dims.length - 1];
+    return Array.from(data.slice(0, hiddenSize));
   }
 
   function cosineSimilarity(a: number[], b: number[]): number {
