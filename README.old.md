@@ -60,28 +60,11 @@ npx tsx scripts/generate-embeddings.ts
 
 Then commit the updated `embeddings.json`.
 
-## Deploy to Render
-
-1. Push to GitHub.
-2. Create a new **Web Service** on [Render](https://render.com) from the repo.
-3. Set the following:
-   - **Build Command:** `npm install && npm run build`
-   - **Start Command:** `npm run start`
-   - **Environment:** Node
-4. Add environment variables:
-   - `NODE_ENV=production`
-   - `PORT=10000` (Render sets this automatically)
-5. Optionally add a **Persistent Disk** mounted at `/data` and set `DATA_DIR=/data` so the database and uploads survive redeploys.
-
-> **Note:** Render's Starter plan has 512MB RAM. The DINOv2 q8 model uses ~88MB, which fits, but leaves limited headroom. Consider upgrading to the Standard plan if you see OOM errors.
-
 ## Deploy to Railway
 
 1. Push to GitHub.
-2. Create a new project on [Railway](https://railway.app) from the repo.
-3. Set environment variables:
-   - `NODE_ENV=production`
-4. Railway automatically runs `npm run build` then `npm run start`.
-5. Optionally provision a **Volume** and set `DATA_DIR` to its mount path so the database and uploads survive redeploys.
+2. Create a new Railway project from the repo.
+3. Set `NODE_ENV=production` in Railway environment variables.
+4. Railway runs `npm run build` (Vite frontend build) then `npm run start` (`npx tsx server.ts`).
 
-> Railway's usage-based pricing makes it a good fit for this app — it scales RAM as needed for the DINOv2 model without requiring a fixed plan upgrade.
+Optionally set `DATA_DIR` to a Railway persistent volume mount path so the database and uploads survive redeploys.
