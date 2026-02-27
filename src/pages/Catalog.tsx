@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { Search, Filter, Heart } from 'lucide-react';
 
 export default function Catalog() {
@@ -155,7 +156,12 @@ export default function Catalog() {
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
         {products.map((product) => (
-          <div key={product.id} className="bg-white rounded-3xl overflow-hidden shadow-sm border border-stone-100 flex flex-col transition-transform hover:scale-[1.02]">
+          <Link
+            key={product.id}
+            to={`/product/${product.id}`}
+            state={{ product }}
+            className="bg-white rounded-3xl overflow-hidden shadow-sm border border-stone-100 flex flex-col transition-transform hover:scale-[1.02]"
+          >
             <div className="relative aspect-square bg-stone-100">
               <img
                 src={product.image_url}
@@ -165,7 +171,7 @@ export default function Catalog() {
                 loading="lazy"
               />
               <button
-                onClick={() => toggleFavorite(product.id)}
+                onClick={(e) => { e.preventDefault(); toggleFavorite(product.id); }}
                 className="absolute top-3 right-3 p-2 bg-white/80 backdrop-blur-sm rounded-full shadow-sm hover:bg-white transition-colors"
               >
                 <Heart
@@ -182,10 +188,10 @@ export default function Catalog() {
               <h3 className="font-serif font-medium text-stone-900 text-sm leading-tight mb-2 line-clamp-2 flex-1">{product.name}</h3>
               <div className="flex items-end justify-between mt-auto">
                 <div className="text-xs text-stone-500 truncate max-w-[60%]">{product.size}</div>
-                <div className="font-mono font-medium text-stone-900">$\{(product.price || 0).toFixed(2)}</div>
+                <div className="font-mono font-medium text-stone-900">${(product.price || 0).toFixed(2)}</div>
               </div>
             </div>
-          </div>
+          </Link>
         ))}
       </div>
       

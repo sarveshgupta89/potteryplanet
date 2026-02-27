@@ -213,6 +213,12 @@ async function startServer() {
     res.json({ success: true, product });
   });
 
+  app.get('/api/products/:id', (req, res) => {
+    const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
+    if (!product) return res.status(404).json({ success: false, message: 'Product not found' });
+    res.json({ success: true, product });
+  });
+
   app.put('/api/products/:id', (req, res) => {
     const { unit_number, name, description, price, vendor, type, size, image_url, h, w, b, d, base } = req.body;
     try {
