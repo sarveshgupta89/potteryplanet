@@ -357,12 +357,13 @@ async function startServer() {
   let extractor: any = null;
   const productEmbeddings = new Map<number, number[]>();
   let embeddingsReady = false;
+  let warmupStarted = false;
   const EMBEDDINGS_CACHE = path.join(DATA_DIR, 'embeddings.json');
 
   async function getExtractor() {
     if (!extractor) {
       console.log('Loading DINOv2 image feature extraction model...');
-      extractor = await pipeline('image-feature-extraction', 'Xenova/dinov2-base', { dtype: 'fp32' });
+      extractor = await pipeline('image-feature-extraction', 'Xenova/dinov2-base', { dtype: 'q8' });
       console.log('DINOv2 model loaded successfully.');
     }
     return extractor;
@@ -446,8 +447,13 @@ async function startServer() {
     }
 
     if (!embeddingsReady) {
+      // Kick off warmup on first search attempt — lazy load avoids OOM at startup
       try { fs.unlinkSync(req.file.path); } catch {}
-      return res.status(503).json({ success: false, message: 'Visual search is warming up, please try again in a moment.' });
+      if (!warmupStarted) {
+        warmupStarted = true;
+        warmupEmbeddings();
+      }
+      return res.status(503).json({ success: false, message: 'Visual search is warming up, please try again in a minute.' });
     }
 
     try {
@@ -513,8 +519,6 @@ async function startServer() {
   const PORT = process.env.PORT || 3001;
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
-    // Start embedding warmup in background — doesn't block server startup
-    warmupEmbeddings();
   });
 }
 
