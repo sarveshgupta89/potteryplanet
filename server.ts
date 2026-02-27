@@ -6,9 +6,37 @@ import Database from 'better-sqlite3';
 import { pipeline } from '@huggingface/transformers';
 import path from 'path';
 import fs from 'fs';
+import * as XLSX from 'xlsx';
 
-// Initialize DB
-const db = new Database('app.db');
+// DATA_DIR: set to a Render persistent disk mount path (e.g. /data) in production
+// so that the database and uploaded images survive deploys/restarts.
+const DATA_DIR = process.env.DATA_DIR || process.cwd();
+const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+// RFC 4180 CSV parser (handles quoted fields with escaped double-quotes)
+function parseCSVLine(line: string): string[] {
+  const fields: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') { current += '"'; i++; }
+      else if (ch === '"') { inQuotes = false; }
+      else { current += ch; }
+    } else {
+      if (ch === '"') { inQuotes = true; }
+      else if (ch === ',') { fields.push(current); current = ''; }
+      else { current += ch; }
+    }
+  }
+  fields.push(current);
+  return fields;
+}
+
+// Initialize DB — stored on persistent disk in production
+const db = new Database(path.join(DATA_DIR, 'app.db'));
 
 // Create tables
 db.exec(`
@@ -26,7 +54,12 @@ db.exec(`
     vendor TEXT,
     type TEXT,
     size TEXT,
-    image_url TEXT
+    image_url TEXT,
+    h TEXT DEFAULT '',
+    w TEXT DEFAULT '',
+    b TEXT DEFAULT '',
+    d TEXT DEFAULT '',
+    base TEXT DEFAULT ''
   );
   CREATE TABLE IF NOT EXISTS favorites (
     user_id INTEGER,
@@ -37,44 +70,66 @@ db.exec(`
   );
 `);
 
-// Insert dummy user if not exists
+// Insert admin user if not exists
 const insertUser = db.prepare('INSERT OR IGNORE INTO users (username, password) VALUES (?, ?)');
 insertUser.run('admin', 'password');
 
-// Dummy data for products if empty
+// Migrate: add dimension columns to existing DBs that predate this schema
+for (const col of ['h', 'w', 'b', 'd', 'base']) {
+  try { db.exec(`ALTER TABLE products ADD COLUMN ${col} TEXT DEFAULT ''`); } catch { /* already exists */ }
+}
+
+// Seed products from products.csv if table is empty
 const count = db.prepare('SELECT COUNT(*) as count FROM products').get() as { count: number };
 if (count.count === 0) {
-  const insertProduct = db.prepare('INSERT INTO products (unit_number, name, description, price, vendor, type, size, image_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-  const dummyProducts = [
-    ['2316', 'Anduze de Lys Pot Medium', 'Medium size pot with lys design', 150.00, 'Giannini', 'Planter', '27"H x 24"W x 13" Dia Base', 'https://picsum.photos/seed/2316/400/400'],
-    ['2315', 'Anduze de Lys Pot Large', 'Large size pot with lys design', 250.00, 'Giannini', 'Planter', '33"H x 29"W x 17" Dia Base', 'https://picsum.photos/seed/2315/400/400'],
-    ['2317', 'Anduze de Lys Pot Small', 'Small size pot with lys design', 95.00, 'Giannini', 'Planter', 'Small', 'https://picsum.photos/seed/2317/400/400'],
-    ['2094', 'Estate Urn', 'Classic estate urn', 120.00, 'Giannini', 'Urn', '26"H x 26"W x 13" sq base', 'https://picsum.photos/seed/2094/400/400'],
-    ['2095', 'Venetian Urn', 'Venetian style urn', 180.00, 'Giannini', 'Urn', '28"H x 23"W x 13" sq base', 'https://picsum.photos/seed/2095/400/400'],
-    ['2092', 'Rolled Rim Square Pot', 'Square pot with rolled rim', 110.00, 'Giannini', 'Planter', '24"H x 24"W', 'https://picsum.photos/seed/2092/400/400'],
-    ['871', 'Garden Ball', 'Decorative garden ball', 45.00, 'Giannini', 'Ornament', '10" diam', 'https://picsum.photos/seed/871/400/400'],
-    ['2093', 'Commercial Tree Planter', 'Large commercial planter', 350.00, 'Giannini', 'Planter', '31"H x 38"W', 'https://picsum.photos/seed/2093/400/400'],
-    ['2450', 'Venetian Lion Wall Plaque', 'Lion head wall plaque', 85.00, 'Campia', 'Wall Ornament', '8"x15"x17"', 'https://picsum.photos/seed/2450/400/400'],
-    ['2467', 'Rams Head Wall Plaque', 'Rams head wall plaque', 75.00, 'Campia', 'Wall Ornament', '3"x8"x9"', 'https://picsum.photos/seed/2467/400/400'],
-    ['2019', 'Deruta Lemon Planter', 'Lemon design planter', 160.00, 'Campia', 'Planter', '12"b x 16"w', 'https://picsum.photos/seed/2019/400/400'],
-    ['2020', 'Deruta Lemon Planter Box', 'Lemon design planter box', 220.00, 'Campia', 'Planter', '18"b x 41"l x 15"w', 'https://picsum.photos/seed/2020/400/400'],
-  ];
-  const insertMany = db.transaction((products) => {
-    for (const p of products) insertProduct.run(...p);
-  });
-  insertMany(dummyProducts);
+  const csvPath = 'products.csv';
+  if (fs.existsSync(csvPath)) {
+    console.log('Seeding products from products.csv...');
+    const lines = fs.readFileSync(csvPath, 'utf-8').split('\n').filter(l => l.trim() !== '');
+    const stmt = db.prepare(
+      'INSERT OR IGNORE INTO products (unit_number, name, description, price, vendor, type, size, image_url, h, w, b, d, base) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    const insertMany = db.transaction((rows: string[]) => {
+      for (const line of rows) {
+        const [prod_num, name, type, h, w, b, d, base, dimensions, photo_filename, , vendor, price] = parseCSVLine(line);
+        stmt.run(
+          prod_num.trim(), name.trim(), '', parseFloat(price) || 0,
+          vendor.trim(), type.trim(), dimensions.trim(), `/images/${photo_filename.trim()}`,
+          h.trim(), w.trim(), b.trim(), d.trim(), base.trim()
+        );
+      }
+    });
+    insertMany(lines);
+    console.log(`Seeded ${lines.length} products from CSV.`);
+  } else {
+    console.warn('products.csv not found — starting with empty catalog.');
+  }
 }
 
 async function startServer() {
   const app = express();
   app.use(express.json());
+  app.use('/images', express.static(path.join(process.cwd(), 'extracted')));
+  app.use('/uploads', express.static(UPLOADS_DIR));
 
-  // Ensure uploads directory exists
-  if (!fs.existsSync('uploads')) {
-    fs.mkdirSync('uploads');
-  }
+  const upload = multer({ dest: path.join(UPLOADS_DIR, 'tmp') });
 
-  const upload = multer({ dest: 'uploads/' });
+  const productImageStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+      const dir = path.join(UPLOADS_DIR, 'products');
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+      cb(null, `${Date.now()}${path.extname(file.originalname)}`);
+    },
+  });
+  const productImageUpload = multer({ storage: productImageStorage });
+
+  app.post('/api/upload-image', productImageUpload.single('image'), (req, res) => {
+    if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
+    res.json({ success: true, url: `/uploads/products/${req.file.filename}` });
+  });
 
   // API Routes
   app.post('/api/login', (req, res) => {
@@ -107,7 +162,7 @@ async function startServer() {
   });
 
   app.get('/api/products', (req, res) => {
-    const { vendor, type, minPrice, maxPrice, search } = req.query;
+    const { vendor, type, minPrice, maxPrice, search, minH, maxH, minW, maxW } = req.query;
     let query = 'SELECT * FROM products WHERE 1=1';
     const params: any[] = [];
 
@@ -115,27 +170,50 @@ async function startServer() {
     if (type) { query += ' AND type = ?'; params.push(type); }
     if (minPrice) { query += ' AND price >= ?'; params.push(minPrice); }
     if (maxPrice) { query += ' AND price <= ?'; params.push(maxPrice); }
-    if (search) { 
-      query += ' AND (name LIKE ? OR unit_number LIKE ? OR description LIKE ?)'; 
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`); 
+    if (search) {
+      query += ' AND (name LIKE ? OR unit_number LIKE ? OR description LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
+    if (minH) { query += " AND h != '' AND CAST(h AS REAL) >= ?"; params.push(minH); }
+    if (maxH) { query += " AND h != '' AND CAST(h AS REAL) <= ?"; params.push(maxH); }
+    if (minW) { query += " AND w != '' AND CAST(w AS REAL) >= ?"; params.push(minW); }
+    if (maxW) { query += " AND w != '' AND CAST(w AS REAL) <= ?"; params.push(maxW); }
 
     const products = db.prepare(query).all(...params);
     res.json(products);
   });
 
   app.post('/api/products', (req, res) => {
-    const { unit_number, name, description, price, vendor, type, size, image_url } = req.body;
+    const { unit_number, name, description, price, vendor, type, size, image_url, h, w, b, d, base } = req.body;
     try {
-      const stmt = db.prepare('INSERT INTO products (unit_number, name, description, price, vendor, type, size, image_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-      const info = stmt.run(unit_number, name, description, price, vendor, type, size, image_url);
+      const stmt = db.prepare('INSERT INTO products (unit_number, name, description, price, vendor, type, size, image_url, h, w, b, d, base) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      const info = stmt.run(unit_number, name, description, price, vendor, type, size, image_url, h || '', w || '', b || '', d || '', base || '');
       res.json({ success: true, id: info.lastInsertRowid });
       // If the model is already loaded, pre-compute embedding for the new product in the background
       if (image_url && extractor) {
-        computeEmbedding(image_url)
+        computeEmbedding(resolveImagePath(image_url))
           .then((emb: number[]) => productEmbeddings.set(Number(info.lastInsertRowid), emb))
           .catch((e: any) => console.error('Failed to embed new product:', e));
       }
+    } catch (err: any) {
+      res.status(400).json({ success: false, message: err.message });
+    }
+  });
+
+  app.get('/api/products/by-unit/:unit_number', (req, res) => {
+    const product = db.prepare('SELECT * FROM products WHERE unit_number = ?').get(req.params.unit_number);
+    if (!product) return res.status(404).json({ success: false, message: 'Product not found' });
+    res.json({ success: true, product });
+  });
+
+  app.put('/api/products/:id', (req, res) => {
+    const { unit_number, name, description, price, vendor, type, size, image_url, h, w, b, d, base } = req.body;
+    try {
+      const info = db.prepare(
+        'UPDATE products SET unit_number=?, name=?, description=?, price=?, vendor=?, type=?, size=?, image_url=?, h=?, w=?, b=?, d=?, base=? WHERE id=?'
+      ).run(unit_number, name, description, parseFloat(price) || 0, vendor, type, size, image_url, h || '', w || '', b || '', d || '', base || '', req.params.id);
+      if (info.changes === 0) return res.status(404).json({ success: false, message: 'Product not found' });
+      res.json({ success: true });
     } catch (err: any) {
       res.status(400).json({ success: false, message: err.message });
     }
@@ -153,6 +231,75 @@ async function startServer() {
     } catch (err: any) {
       res.status(400).json({ success: false, message: err.message });
     }
+  });
+
+  app.post('/api/products/bulk-price-file', upload.single('file'), (req, res) => {
+    if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
+
+    const vendor = (req.body.vendor || '').trim();
+    const origName = req.file.originalname.toLowerCase();
+    const isXlsx = origName.endsWith('.xlsx') || origName.endsWith('.xls');
+
+    // Parse rows into { product_num, price }
+    type Row = { product_num: string; price: number };
+    let rows: Row[] = [];
+
+    try {
+      if (isXlsx) {
+        const wb = XLSX.readFile(req.file.path);
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as any[][];
+        if (data.length < 2) throw new Error('File has no data rows');
+        const headers = data[0].map((h: any) => String(h).toLowerCase().trim());
+        const numIdx = headers.findIndex((h: string) => /product|unit|num/.test(h));
+        const priceIdx = headers.findIndex((h: string) => h.includes('price'));
+        if (numIdx === -1 || priceIdx === -1) throw new Error('Could not find product_num and price columns');
+        for (let i = 1; i < data.length; i++) {
+          const product_num = String(data[i][numIdx] ?? '').trim();
+          const rawPrice = String(data[i][priceIdx] ?? '').replace(/[$,\s]/g, '');
+          const price = parseFloat(rawPrice);
+          if (product_num && !isNaN(price)) rows.push({ product_num, price });
+        }
+      } else {
+        // CSV
+        const content = fs.readFileSync(req.file.path, 'utf-8');
+        const lines = content.split('\n').filter(l => l.trim() !== '');
+        if (lines.length < 2) throw new Error('File has no data rows');
+        const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().trim());
+        const numIdx = headers.findIndex(h => /product|unit|num/.test(h));
+        const priceIdx = headers.findIndex(h => h.includes('price'));
+        if (numIdx === -1 || priceIdx === -1) throw new Error('Could not find product_num and price columns');
+        for (let i = 1; i < lines.length; i++) {
+          const cols = parseCSVLine(lines[i]);
+          const product_num = (cols[numIdx] ?? '').trim();
+          const rawPrice = (cols[priceIdx] ?? '').replace(/[$,\s]/g, '');
+          const price = parseFloat(rawPrice);
+          if (product_num && !isNaN(price)) rows.push({ product_num, price });
+        }
+      }
+    } catch (err: any) {
+      try { fs.unlinkSync(req.file.path); } catch {}
+      return res.status(400).json({ success: false, message: err.message });
+    }
+
+    try { fs.unlinkSync(req.file.path); } catch {}
+
+    const updateStmt = vendor
+      ? db.prepare('UPDATE products SET price = ? WHERE unit_number = ? AND vendor = ?')
+      : db.prepare('UPDATE products SET price = ? WHERE unit_number = ?');
+
+    let updatedCount = 0;
+    const applyUpdates = db.transaction((items: Row[]) => {
+      for (const item of items) {
+        const info: any = vendor
+          ? updateStmt.run(item.price, item.product_num, vendor)
+          : updateStmt.run(item.price, item.product_num);
+        updatedCount += info.changes;
+      }
+    });
+    applyUpdates(rows);
+
+    res.json({ success: true, message: `Updated ${updatedCount} product(s) from ${rows.length} rows in file.` });
   });
 
   app.get('/api/favorites/:userId', (req, res) => {
@@ -185,6 +332,20 @@ async function startServer() {
     }
   });
 
+  app.put('/api/users/:id/password', (req, res) => {
+    const { id } = req.params;
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ success: false, message: 'Current and new password are required' });
+    }
+    const user = db.prepare('SELECT id FROM users WHERE id = ? AND password = ?').get(id, currentPassword);
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'Current password is incorrect' });
+    }
+    db.prepare('UPDATE users SET password = ? WHERE id = ?').run(newPassword, id);
+    res.json({ success: true, message: 'Password updated successfully' });
+  });
+
   // DINOv2 image feature extractor for visual similarity search
   let extractor: any = null;
   const productEmbeddings = new Map<number, number[]>();
@@ -211,6 +372,18 @@ async function startServer() {
     return dot;
   }
 
+  // Resolve a URL-style image path to a local filesystem path for embedding
+  function resolveImagePath(imageUrl: string): string {
+    if (!imageUrl) return imageUrl;
+    if (imageUrl.startsWith('/images/')) {
+      return path.join(process.cwd(), 'extracted', path.basename(imageUrl));
+    }
+    if (imageUrl.startsWith('/uploads/')) {
+      return path.join(process.cwd(), 'uploads', path.basename(imageUrl));
+    }
+    return imageUrl; // full HTTP URL or absolute path — use as-is
+  }
+
   async function ensureProductEmbeddings() {
     const products = db.prepare('SELECT id, image_url FROM products').all() as any[];
     const missing = products.filter((p: any) => !productEmbeddings.has(p.id));
@@ -218,7 +391,8 @@ async function startServer() {
     console.log(`Computing embeddings for ${missing.length} product(s)...`);
     for (const product of missing) {
       try {
-        const emb = await computeEmbedding(product.image_url);
+        const localPath = resolveImagePath(product.image_url);
+        const emb = await computeEmbedding(localPath);
         productEmbeddings.set(product.id, emb);
       } catch (e) {
         console.error(`Failed to embed product ${product.id}:`, e);
@@ -295,7 +469,7 @@ async function startServer() {
     });
   }
 
-  const PORT = 3000;
+  const PORT = process.env.PORT || 3001;
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });

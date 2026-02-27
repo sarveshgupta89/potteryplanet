@@ -30,7 +30,7 @@ export default function App() {
             <Route path="/" element={<Catalog />} />
             <Route path="/search" element={<Search />} />
             <Route path="/wishlist" element={<Wishlist user={user} />} />
-            <Route path="/admin" element={<Admin />} />
+            <Route path="/admin" element={<Admin user={user} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

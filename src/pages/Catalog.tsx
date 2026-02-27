@@ -7,17 +7,30 @@ export default function Catalog() {
   const [vendor, setVendor] = useState('');
   const [type, setType] = useState('');
   const [favorites, setFavorites] = useState<number[]>([]);
+  const [priceRange, setPriceRange] = useState('');
+  const [heightRange, setHeightRange] = useState('');
+  const [widthRange, setWidthRange] = useState('');
 
   useEffect(() => {
     fetchProducts();
     fetchFavorites();
-  }, [search, vendor, type]);
+  }, [search, vendor, type, priceRange, heightRange, widthRange]);
 
   const fetchProducts = async () => {
     const params = new URLSearchParams();
     if (search) params.append('search', search);
     if (vendor) params.append('vendor', vendor);
     if (type) params.append('type', type);
+    if (priceRange === 'lt200') params.append('maxPrice', '200');
+    else if (priceRange === 'lt500') params.append('maxPrice', '500');
+    else if (priceRange === 'lt1000') params.append('maxPrice', '1000');
+    else if (priceRange === 'gt1000') params.append('minPrice', '1000');
+    if (heightRange === 'lt24') params.append('maxH', '24');
+    else if (heightRange === '24to48') { params.append('minH', '24'); params.append('maxH', '48'); }
+    else if (heightRange === 'gt48') params.append('minH', '48');
+    if (widthRange === 'lt24') params.append('maxW', '24');
+    else if (widthRange === '24to48') { params.append('minW', '24'); params.append('maxW', '48'); }
+    else if (widthRange === 'gt48') params.append('minW', '48');
     
     const res = await fetch(`/api/products?${params.toString()}`);
     const data = await res.json();
@@ -68,11 +81,11 @@ export default function Catalog() {
             />
           </div>
           
-          <div className="flex gap-2 overflow-x-auto pb-2 hide-scrollbar">
+          <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
             <select
               value={vendor}
               onChange={(e) => setVendor(e.target.value)}
-              className="px-4 py-2 bg-white border border-stone-200 rounded-full text-sm font-medium text-stone-700 focus:outline-none focus:ring-2 focus:ring-stone-900 shadow-sm appearance-none pr-8 relative"
+              className="px-4 py-2 bg-white border border-stone-200 rounded-full text-sm font-medium text-stone-700 focus:outline-none focus:ring-2 focus:ring-stone-900 shadow-sm appearance-none pr-8 shrink-0"
               style={{ backgroundImage: 'url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23131313%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right .7rem top 50%', backgroundSize: '.65rem auto' }}
             >
               <option value="">All Vendors</option>
@@ -80,19 +93,61 @@ export default function Catalog() {
               <option value="Campia">Campia</option>
               <option value="Herit">Herit</option>
             </select>
-            
+
             <select
               value={type}
               onChange={(e) => setType(e.target.value)}
-              className="px-4 py-2 bg-white border border-stone-200 rounded-full text-sm font-medium text-stone-700 focus:outline-none focus:ring-2 focus:ring-stone-900 shadow-sm appearance-none pr-8 relative"
+              className="px-4 py-2 bg-white border border-stone-200 rounded-full text-sm font-medium text-stone-700 focus:outline-none focus:ring-2 focus:ring-stone-900 shadow-sm appearance-none pr-8 shrink-0"
               style={{ backgroundImage: 'url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23131313%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right .7rem top 50%', backgroundSize: '.65rem auto' }}
             >
               <option value="">All Types</option>
-              <option value="Planter">Planter</option>
-              <option value="Urn">Urn</option>
-              <option value="Fountain">Fountain</option>
-              <option value="Wall Ornament">Wall Ornament</option>
-              <option value="Ornament">Ornament</option>
+              <option value="Planters_and_Urns">Planters &amp; Urns</option>
+              <option value="Fountains">Fountains</option>
+              <option value="Benches_and_Tables">Benches &amp; Tables</option>
+              <option value="Fire_Pits_and_Tables">Fire Pits &amp; Tables</option>
+              <option value="Ponds_and_Coping">Ponds &amp; Coping</option>
+              <option value="Italian_Ceramics">Italian Ceramics</option>
+              <option value="Italian_Furniture">Italian Furniture</option>
+              <option value="Home_Installations">Home Installations</option>
+              <option value="Pizza_Ovens">Pizza Ovens</option>
+              <option value="NEW_for_2025">New for 2025</option>
+            </select>
+
+            <select
+              value={priceRange}
+              onChange={(e) => setPriceRange(e.target.value)}
+              className="px-4 py-2 bg-white border border-stone-200 rounded-full text-sm font-medium text-stone-700 focus:outline-none focus:ring-2 focus:ring-stone-900 shadow-sm appearance-none pr-8 shrink-0"
+              style={{ backgroundImage: 'url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23131313%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right .7rem top 50%', backgroundSize: '.65rem auto' }}
+            >
+              <option value="">All Prices</option>
+              <option value="lt200">Under $200</option>
+              <option value="lt500">Under $500</option>
+              <option value="lt1000">Under $1,000</option>
+              <option value="gt1000">$1,000+</option>
+            </select>
+
+            <select
+              value={heightRange}
+              onChange={(e) => setHeightRange(e.target.value)}
+              className="px-4 py-2 bg-white border border-stone-200 rounded-full text-sm font-medium text-stone-700 focus:outline-none focus:ring-2 focus:ring-stone-900 shadow-sm appearance-none pr-8 shrink-0"
+              style={{ backgroundImage: 'url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23131313%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right .7rem top 50%', backgroundSize: '.65rem auto' }}
+            >
+              <option value="">All Heights</option>
+              <option value="lt24">Under 24"</option>
+              <option value="24to48">24" – 48"</option>
+              <option value="gt48">Over 48"</option>
+            </select>
+
+            <select
+              value={widthRange}
+              onChange={(e) => setWidthRange(e.target.value)}
+              className="px-4 py-2 bg-white border border-stone-200 rounded-full text-sm font-medium text-stone-700 focus:outline-none focus:ring-2 focus:ring-stone-900 shadow-sm appearance-none pr-8 shrink-0"
+              style={{ backgroundImage: 'url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23131313%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right .7rem top 50%', backgroundSize: '.65rem auto' }}
+            >
+              <option value="">All Widths</option>
+              <option value="lt24">Under 24"</option>
+              <option value="24to48">24" – 48"</option>
+              <option value="gt48">Over 48"</option>
             </select>
           </div>
         </div>
