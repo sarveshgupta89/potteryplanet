@@ -7,6 +7,10 @@ import { pipeline } from '@huggingface/transformers';
 import path from 'path';
 import fs from 'fs';
 import * as XLSX from 'xlsx';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // DATA_DIR: set to a Render persistent disk mount path (e.g. /data) in production
 // so that the database and uploaded images survive deploys/restarts.
